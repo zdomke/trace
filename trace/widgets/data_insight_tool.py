@@ -55,6 +55,11 @@ if not logger.hasHandlers():
 
 
 class DataVisualizationModel(QAbstractTableModel):
+    """Table Model for fetching and storing the data for a given curve on the
+    model. Gathers live data directly from the curve, but makes an HTTP request
+    to the Archiver Appliance
+    """
+
     reply_recieved = Signal()
 
     def __init__(self, parent: QObject = None) -> None:
@@ -69,12 +74,19 @@ class DataVisualizationModel(QAbstractTableModel):
         self.network_manager.finished.connect(self.recieve_archive_reply)
 
     def rowCount(self, index: QModelIndex = QModelIndex()):
+        """Return the row count of the table"""
+        if index is not None and index.isValid():
+            return 0
         return self.df.shape[0]
 
     def columnCount(self, index: QModelIndex = QModelIndex()):
+        """Return the column count of the table"""
+        if index is not None and index.isValid():
+            return 0
         return self.df.shape[1]
 
     def data(self, index: QModelIndex, role: Qt.ItemDataRole = Qt.DisplayRole):
+        """Return the data for the associated role. Currently only supporting DisplayRole."""
         if not index.isValid():
             return None
         elif role == Qt.DisplayRole:
@@ -83,10 +95,23 @@ class DataVisualizationModel(QAbstractTableModel):
         return None
 
     def headerData(self, section: int, orientation: Qt.Orientation, role: Qt.ItemDataRole = Qt.DisplayRole):
+        """Return data associated with the header"""
         if orientation == Qt.Horizontal and role == Qt.DisplayRole:
             return self.df.columns[section]
 
     def set_all_data(self, curve_item: TimePlotCurveItem, x_range: Iterable[int]):
+        """Set the model's data for the given curve and the given time range.
+        This function determines what kind of data should be saved and prompts
+        the methods for setting live or archived data as necessary. This also
+        saves the meta data.
+
+        Parameters
+        ----------
+        curve_item : TimePlotCurveItem
+            The curve for the model to collect and store data on
+        x_range : Iterable[int]
+            The time range to collect and store data between
+        """
         self.address = curve_item.address
         self.unit = curve_item.units
         self.description = caget(curve_item.address + ".DESC")
@@ -169,6 +194,15 @@ class DataVisualizationModel(QAbstractTableModel):
         self.network_manager.get(request)
 
     def recieve_archive_reply(self, reply: QNetworkReply):
+        """Process the recieved reply to the request made in request_archive_data.
+        Unpack the data and call set_archive_data. Mostly checks if the reply
+        contains an error.
+
+        Parameters
+        ----------
+        reply : QNetworkReply
+            Reply to the network request made in request_archive_data
+        """
         self.reply_recieved.emit()
         if reply.error() == QNetworkReply.NoError:
             bytes_str = reply.readAll()
@@ -182,6 +216,14 @@ class DataVisualizationModel(QAbstractTableModel):
         reply.deleteLater()
 
     def set_archive_data(self, data_dict: dict):
+        """Set the live data for the given curve in the given time range. Appends
+        rows within the time range to the end of the model's dataframe.
+
+        Parameters
+        ----------
+        data_dict : dict
+            Dictionary containing all data to be added to the model's dataframe
+        """
         convert_data = {"Datetime": [], "Value": [], "Severity": []}
         for point in data_dict[0]["data"]:
             ts = point["secs"] + (point["nanos"] * 1e-9)
@@ -202,6 +244,24 @@ class DataVisualizationModel(QAbstractTableModel):
         self.layoutChanged.emit()
 
     def export_data(self, file_path: Path, extension: str):
+        """Export the model's data to the given file. Adds metadata to the top of
+        the exported file with the curve's address, unit (if any), and description.
+
+        Parameters
+        ----------
+        file_path : Path
+            The path of the file to be (over)written with the exported data
+        extension : str
+            The extension of the file to be (over)written
+
+        Raises
+        ------
+        ValueError
+            Raised when export is requested without data in the model, or when an
+            invalid file format is requested for export
+        IsADirectoryError
+            Raised when the provided filepath is a directory
+        """
         if self.df.empty:
             raise ValueError("No data to export. Request data first.")
         if file_path.is_dir():
