@@ -101,19 +101,25 @@ class DataVisualizationModel(QAbstractTableModel):
 
         # Populate the model with archive data if it is shown on the plot
         if x_range[0] <= curve_range[0]:
-            from_dt = datetime.fromtimestamp(x_range[0], tz=timezone.utc)
-            to_dt = datetime.fromtimestamp(left_ts, tz=timezone.utc)
-            self.request_archive_data(curve_item.address, from_dt, to_dt)
+            self.request_archive_data(curve_item.address, (x_range[0], left_ts))
         else:
+            # Emulate network reply being recieved for parent widget
             self.reply_recieved.emit()
 
-        self.unit = curve_item.units
-        self.description = caget(curve_item.address + ".DESC")
+    def set_live_data(self, curve_item: TimePlotCurveItem, x_range: Iterable[int]):
+        """Set the live data for the given curve in the given time range. Appends
+        rows within the time range to the end of the model's dataframe.
 
-    def set_live_data(self, curve_item: TimePlotCurveItem, ts_range: Iterable[int]):
+        Parameters
+        ----------
+        curve_item : TimePlotCurveItem
+            The curve for the model to collect and store data on
+        x_range : Iterable[int]
+            The time range to collect and store data between
+        """
         data_n = curve_item.getBufferSize()
         data = curve_item.data_buffer[:, :data_n]
-        indices = np.where((ts_range[0] <= data[0]) & (data[0] <= ts_range[1]))[0]
+        indices = np.where((x_range[0] <= data[0]) & (data[0] <= x_range[1]))[0]
 
         convert_data = {"Datetime": [], "Value": [], "Severity": []}
         convert_data["Datetime"] = data[0, indices]
@@ -128,10 +134,20 @@ class DataVisualizationModel(QAbstractTableModel):
         self.df = live_df
         self.endResetModel()
 
-    def request_archive_data(self, pv_name: str, from_dt: datetime, to_dt: datetime):
-        from_date_str = from_dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
-        to_date_str = to_dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+    def request_archive_data(self, pv_name: str, x_range: Iterable[int]):
+        """Request data from the Archiver Appliance for the given PV and time range.
+        Only gets raw data, never optimized. Ends early if there is no environment
+        variable PYDM_ARCHIVER_URL, which would contain the url for the Archiver
+        Appliance.
 
+        Parameters
+        ----------
+        pv_name : str
+            The PV address to request data for
+        x_range : Iterable[int]
+            The time range to collect and store data between
+        """
+        # Check the $PYDM_ARCHIVER_URL is populated
         base_url = os.getenv("PYDM_ARCHIVER_URL")
         if base_url is None:
             logger.error(
@@ -140,8 +156,15 @@ class DataVisualizationModel(QAbstractTableModel):
             )
             return
 
-        url_string = f"{base_url}/retrieval/data/getData.json?pv={pv_name}&from={from_date_str}&to={to_date_str}"
+        # Correctly format the timestamps for the Archiver Appliance
+        from_dt = datetime.fromtimestamp(x_range[0], tz=timezone.utc)
+        from_date_str = from_dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
+        to_dt = datetime.fromtimestamp(x_range[1], tz=timezone.utc)
+        to_date_str = to_dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+        # Construct the request url and make the request
+        url_string = f"{base_url}/retrieval/data/getData.json?pv={pv_name}&from={from_date_str}&to={to_date_str}"
         request = QNetworkRequest(QUrl(url_string))
         self.network_manager.get(request)
 
