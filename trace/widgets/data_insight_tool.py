@@ -61,6 +61,7 @@ class DataVisualizationModel(QAbstractTableModel):
         super().__init__(parent)
         self.df = pd.DataFrame(columns=["Datetime", "Value", "Severity", "Source"])
 
+        self.address = None
         self.unit = None
         self.description = None
 
@@ -86,6 +87,10 @@ class DataVisualizationModel(QAbstractTableModel):
             return self.df.columns[section]
 
     def set_all_data(self, curve_item: TimePlotCurveItem, x_range: Iterable[int]):
+        self.address = curve_item.address
+        self.unit = curve_item.units
+        self.description = caget(curve_item.address + ".DESC")
+
         curve_range = (curve_item.min_x(), curve_item.max_x())
         left_ts = max(x_range[0], curve_range[0])
         right_ts = min(x_range[1], curve_range[1])
@@ -173,26 +178,34 @@ class DataVisualizationModel(QAbstractTableModel):
             self.endInsertRows()
         self.layoutChanged.emit()
 
-    def export_data(self, file_name: Path, extension: str):
+    def export_data(self, file_path: Path, extension: str):
         if self.df.empty:
             raise ValueError("No data to export. Request data first.")
-        if file_name.is_dir():
+        if file_path.is_dir():
             raise IsADirectoryError("The selected path is a directory. Select a file to export to.")
         if extension not in [".csv", ".mat", ".json"]:
             raise ValueError("Unrecognized file format requested. Skipping export.")
 
-        backup = self.df["Datetime"]
-        self.df["Datetime"] = self.df["Datetime"].astype("int64") / 1e9
+        header_dict = {"Address": self.address, "Unit": self.unit, "Description": self.description}
+
+        export_df = self.df.copy()
+        export_df["Datetime"] = export_df["Datetime"].astype("int64") / 1e9
 
         if extension == ".csv":
-            self.df.to_csv(file_name, index=False)
+            file_header = "".join([f"{k}: {v}\n" for k, v in header_dict.items()])
+            with file_path.open("w") as file:
+                file.write(file_header)
+                export_df.to_csv(file, index=False, mode="a")
         elif extension == ".mat":
-            df_dict = {name: col.values for name, col in self.df.items()}
-            savemat(file_name, df_dict)
+            header_dict.update({name: col.values for name, col in export_df.items()})
+            savemat(file_path, header_dict)
         elif extension == ".json":
-            self.df.to_json(file_name, orient="records", indent=2)
-
-        self.df["Datetime"] = backup
+            if export_df["Value"].dtype == object:
+                export_df["Value"] = export_df["Value"].astype("str")
+            data_dict = export_df.to_dict(orient="records")
+            export_dict = {"meta": header_dict, "data": data_dict}
+            with file_path.open("w") as file:
+                json.dump(export_dict, file, indent=2)
 
 
 class CurveFilterModel(QSortFilterProxyModel):
