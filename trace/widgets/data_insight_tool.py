@@ -292,12 +292,29 @@ class DataVisualizationModel(QAbstractTableModel):
 
 
 class CurveFilterModel(QSortFilterProxyModel):
+    """FilterProxyModel for trace's curves model. This proxy model filters out
+    the curves without an address and the FormulaCurveItems.
+    """
+
     def filterAcceptsRow(self, source_row: int, source_parent: QModelIndex):
+        """Determine if the given row is valid and should be presented to the user.
+        This includes ArchivePlotCurveItems that have an address.
+
+        Returns
+        -------
+        bool :
+            The row is valid and should be presented to the user
+        """
         curve = self.sourceModel().curve_at_index(source_row)
         return isinstance(curve, ArchivePlotCurveItem) and bool(curve.address)
 
 
 class DataInsightTool(QWidget):
+    """The Data Insight Tool is a standalone widget that allows users to display
+    all archive and live data on the plot for any given curve. Users are also able
+    to export the raw data from this tool.
+    """
+
     def __init__(self, parent: QObject, curves_model: QAbstractTableModel, plot: PyDMArchiverTimePlot) -> None:
         super().__init__(parent=parent)
         self.setWindowFlag(Qt.Window)
@@ -320,6 +337,7 @@ class DataInsightTool(QWidget):
         self.get_data(0)
 
     def layout_init(self):
+        """Initialize the layout of the Data Insight Tool widget."""
         self.main_layout = QVBoxLayout()
 
         # Populate the PV selection and request layout at the top of the widget
@@ -339,8 +357,8 @@ class DataInsightTool(QWidget):
 
         # Create the metadata label and refresh button
         self.metadata_layout = QHBoxLayout()
-        self.metadata_label = QLabel()
-        self.metadata_layout.addWidget(self.metadata_label, alignment=Qt.AlignLeft)
+        self.meta_data_label = QLabel()
+        self.metadata_layout.addWidget(self.meta_data_label, alignment=Qt.AlignLeft)
 
         self.refresh_button = QPushButton("Refresh Data")
         self.metadata_layout.addWidget(self.refresh_button, alignment=Qt.AlignRight)
@@ -353,13 +371,47 @@ class DataInsightTool(QWidget):
 
         self.setLayout(self.main_layout)
 
+    def set_meta_data(self):
+        """Populate the meta_data_label with the curve's unit (if any) and description."""
+        meta_str = ""
+        if self.data_vis_model.unit:
+            meta_str = self.data_vis_model.unit + ", "
+        meta_str += self.data_vis_model.description
+        self.meta_data_label.setText(meta_str)
+
+    def combobox_to_curve(self, combobox_ind: int) -> ArchivePlotCurveItem:
+        """Convert an index for the pv_select_box combobox to the corresponding
+        curve item from the curves model.
+
+        Parameters
+        ----------
+        combobox_ind : int
+            The index for pv_select_box
+
+        Returns
+        -------
+        ArchivePlotCurveItem
+            The curve item that corresponds to the PV chosen on the combobox
+        """
+        if combobox_ind < 0 or self.pv_select_box.count() <= combobox_ind:
+            combobox_ind = self.pv_select_box.currentIndex()
+        model_ind = self.curve_filter_model.index(combobox_ind, 0)
+        corrected_ind = self.curve_filter_model.mapToSource(model_ind)
+        return self.curves_model.curve_at_index(corrected_ind)
+
+    @Slot()
     def export_data_to_file(self):
+        """Prompt the user to select a file to export data to then prompt the
+        DataVisualizationModel to export its data to the selected file.
+        """
         file_name, extension_filter = QFileDialog.getSaveFileName(
             self,
             "Export Archive Data",
             Path(".").name,
             "Comma-Separated Values File (*.csv);;MAT-File (*.mat);;JSON File (*.json)",
         )
+        if not extension_filter:
+            return
         extension = re.search(r"\*(.*?)\)", extension_filter).group(1)
         file_name = Path(file_name).with_suffix(extension)
 
@@ -369,21 +421,20 @@ class DataInsightTool(QWidget):
             logger.error(str(e))
             QMessageBox.critical(self, "Error", str(e))
 
-    def set_metadata(self):
-        meta_str = ""
-        if self.data_vis_model.unit:
-            meta_str = self.data_vis_model.unit + ", "
-        meta_str += self.data_vis_model.description
-        self.metadata_label.setText(meta_str)
-
     @Slot()
     @Slot(int)
-    def get_data(self, curve_index: int = -1):
-        if curve_index < 0:
-            curve_index = self.pv_select_box.currentIndex()
-        curve_item = self.curves_model.curve_at_index(curve_index)
+    def get_data(self, combobox_index: int = -1):
+        """Prompt the DataVisualizationModel to fetch and save the data for the
+        curve chosen by the user for the time range on the associated plot.
+
+        Parameters
+        ----------
+        combobox_index : int, optional
+            The index in the pv_select_box for the user selected curve, by default -1
+        """
+        curve_item = self.combobox_to_curve(combobox_index)
         x_range = self.plot.getXAxis().range
 
         self.data_vis_model.set_all_data(curve_item, x_range)
-        self.set_metadata()
+        self.set_meta_data()
         self.loading_label.show()
